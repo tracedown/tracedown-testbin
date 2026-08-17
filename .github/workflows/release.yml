@@ -1,14 +1,15 @@
 name: Release
 
-# Version-bump-driven, like the rest of the stack: runs on every push to main,
-# and publishes only when the version in pyproject.toml has no release yet.
+# Version-bump-driven and gated on PR Checks succeeding for the main push;
+# publishes only when the version in pyproject.toml has no release yet.
 # Merging a PR that bumps the version IS the release trigger — the workflow
 # creates the vX.Y.Z tag and the GitHub release itself.
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["PR Checks"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write
@@ -17,11 +18,18 @@ jobs:
   release:
     name: Build & publish release
     # Upstream-only: forks never release.
-    if: github.repository == 'tracedown/tracedown-testbin'
+    # Runs only after the checks run for this main push succeeded — a release
+    # can never ship from an untested commit.
+    if: >-
+      github.repository == 'tracedown/tracedown-testbin' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout tested commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Read version
         id: version
@@ -60,7 +68,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            --target "$GITHUB_SHA" \
+            --target "${{ github.event.workflow_run.head_sha }}" \
             --title "Tracedown Testbin ${{ steps.version.outputs.tag }}" \
             --notes "Deterministic HTTP target for testing Lace probes and the Tracedown pipeline. Run from source, the Docker image, or \`pip install\` the wheel." \
             dist/*
