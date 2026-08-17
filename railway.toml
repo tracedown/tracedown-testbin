@@ -1,0 +1,11 @@
+# Railway config-as-code. Forces the Dockerfile build — otherwise Railway's
+# Railpack buildpack auto-detects Python, looks for a root main.py/app.py
+# (this app's entrypoint is under src/), and fails with "No start command".
+[build]
+builder = "dockerfile"
+dockerfilePath = "docker/Dockerfile"
+
+[deploy]
+# uvicorn already binds $PORT (see the Dockerfile CMD); Railway injects it.
+healthcheckPath = "/health"
+restartPolicyType = "on_failure"

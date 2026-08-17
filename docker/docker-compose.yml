@@ -1,0 +1,38 @@
+# Standalone deployment of tracedown-testbin (all three listeners).
+#
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# For public hosting set ADMIN_TOKEN (guards /state listing & global reset).
+services:
+  testbin:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: tracedown-testbin
+    ports:
+      - "20780:20780"   # HTTP API
+      - "20781:20781"   # self-signed TLS listener
+      - "20782:20782"   # raw-TCP chaos listener
+    environment:
+      PORT: 20780
+      TLS_PORT: 20781
+      CHAOS_PORT: 20782
+      TLS_ENABLED: "true"
+      CHAOS_ENABLED: "true"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      STATE_DB_PATH: /data/state.db
+      # Auto-ban >100 req/s per IP. Whitelist your probe agents' egress
+      # IP/CIDR, or the first load-test burst bans them.
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_WHITELIST: ${RATE_LIMIT_WHITELIST:-}
+    volumes:
+      - testbin-state:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:20780/health')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  testbin-state:

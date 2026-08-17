@@ -1,0 +1,128 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+    # 'edited' fires on PR title/body changes, so removing a 'WIP:' prefix
+    # re-triggers the checks without needing a new push.
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  # Pre-filter: skipped when the PR title starts with 'WIP:'. Every other job
+  # needs it, so a skipped gate cascades to skip all checks. Editing the title
+  # to drop the 'WIP:' prefix re-triggers the workflow (see on.pull_request.types).
+  wip-gate:
+    name: WIP gate
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.event.pull_request.title, 'WIP:') }}
+    steps:
+      - name: Not WIP
+        run: echo "PR is not WIP — running checks."
+
+  # Detects what changed so downstream jobs self-skip. Two flags:
+  #   - code:   src/, tests/ or pyproject.toml → compile + tests
+  #   - docker: src/, docker/ or pyproject.toml → image build
+  changed-paths:
+    name: Detect changed paths
+    needs: [wip-gate]
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed paths
+        id: filter
+        env:
+          # The PR's actual base branch (main here), not a hardcoded name.
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          CODE=$(git diff --name-only "$BASE"...HEAD -- src/ tests/ pyproject.toml)
+          if [ -n "$CODE" ]; then
+            echo "Code changes detected (compile + tests will run):"; echo "$CODE"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No src/tests/pyproject changes — compile + tests skipped."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          DOCKER=$(git diff --name-only "$BASE"...HEAD -- src/ docker/ pyproject.toml)
+          if [ -n "$DOCKER" ]; then
+            echo "Packaging-relevant changes detected (image build will run):"; echo "$DOCKER"
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No src/docker/pyproject changes — image build skipped."
+            echo "docker=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  py-compile:
+    name: Byte-compile
+    needs: [wip-gate, changed-paths]
+    if: ${{ needs.changed-paths.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile all sources (syntax gate)
+        run: python -m compileall -q src tests
+
+  tests:
+    name: Unit tests
+    # Runs only after the compile gate passes and only on code changes.
+    needs: [wip-gate, changed-paths, py-compile]
+    if: ${{ needs.changed-paths.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (with dev extras)
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+  # The repo ships as a container — a failing Dockerfile is a shipping bug, so
+  # build it (no push) when packaging-relevant files change.
+  docker-build:
+    name: Docker build
+    needs: [wip-gate, changed-paths]
+    if: ${{ needs.changed-paths.outputs.docker == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        run: docker build -f docker/Dockerfile -t tracedown-testbin:pr .
+
+      - name: Smoke-test the image honors $PORT
+        run: |
+          docker run -d --name smoke -e PORT=8080 -e TLS_ENABLED=false \
+            -e CHAOS_ENABLED=false -p 8080:8080 tracedown-testbin:pr
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8080/health && break
+            echo "waiting for app... ($i/20)"; sleep 1
+          done
+          curl -sf http://localhost:8080/health
+          docker rm -f smoke
