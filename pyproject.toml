@@ -1,22 +1,22 @@
 [project]
 name = "tracedown-testbin"
-version = "0.1.0"
+version = "0.1.1"
 description = "Deterministic HTTP target for testing Lace probes and the Tracedown platform. httpbin-like, tailored to cover every Lace assertion scope, call-config field and Tracedown pipeline behavior."
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn>=0.30",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "httpx>=0.27",
+    "pytest>=9.1.1",
+    "httpx>=0.28.1",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
